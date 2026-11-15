@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry
@@ -53,6 +53,9 @@ class TransportNSWRuntimeData:
 
     coordinator: DataUpdateCoordinator
     api_store: Store
+    board_coordinators: dict[str, DataUpdateCoordinator] = field(
+        default_factory=dict
+    )
 
 
 type TransportNSWConfigEntry = ConfigEntry[TransportNSWRuntimeData]
@@ -101,6 +104,7 @@ class TransportNSWCoordinator(DataUpdateCoordinator):
         self.daily_api_calls = 0  # We'll update it properly later, in async_update_data
         self.rolling_average_api_calls = None  # Will be calculated during updates
         self._rolling_average_api_calls_list = []  # Used to calculate auto-intervals
+        self.board_api_calls = 0  # Calls made by departure boards since the last poll
 
         # Initialise DataUpdateCoordinator
         super().__init__(
@@ -147,7 +151,9 @@ class TransportNSWCoordinator(DataUpdateCoordinator):
         returned_data = {}
 
         # Capture the total API counts raised by the integration per poll - used for auto-interval
-        integration_api_count = 0
+        # Departure boards poll separately, so start with the calls they've made since the last poll
+        integration_api_count = self.board_api_calls
+        self.board_api_calls = 0
         latest_end_time = "00:00:01"
 
         for subentry in self.config_entry.subentries.values():

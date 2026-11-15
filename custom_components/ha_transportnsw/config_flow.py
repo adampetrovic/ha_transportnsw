@@ -40,10 +40,12 @@ from .const import (
     DOMAIN,
     MIN_SCAN_INTERVAL,
     STOP_TEST_ID,
+    SUBENTRY_TYPE_BOARD,
     SUBENTRY_TYPE_JOURNEY,
     TFNSW_REGISTRATION,
 )
 from .helpers import check_stops
+from .board_flow import DepartureBoardSubEntryFlowHandler
 from .subentry_flow import JourneySubEntryFlowHandler
 
 _LOGGER = logging.getLogger(__name__)
@@ -85,7 +87,10 @@ class TransportNSWConfigFlowHandler(ConfigFlow, domain=DOMAIN):
     ) -> dict[str, type[ConfigSubentryFlow]]:
         # Return subentries supported by this integration
 
-        return {SUBENTRY_TYPE_JOURNEY: JourneySubEntryFlowHandler}
+        return {
+            SUBENTRY_TYPE_JOURNEY: JourneySubEntryFlowHandler,
+            SUBENTRY_TYPE_BOARD: DepartureBoardSubEntryFlowHandler,
+        }
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None

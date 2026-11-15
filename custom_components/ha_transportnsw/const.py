@@ -325,4 +325,16 @@ ALERT_PRIORITIES = {
 #     "X": "XPT",
 # }
 
+# Departure boards
+SUBENTRY_TYPE_BOARD = "subentry_departure_board"
+CONF_BOARD_STOP = "stop"
+CONF_BOARD_STOP_ID = "stop_id"
+CONF_BOARD_STOP_NAME = "stop_name"
+CONF_BOARD_LINES = "lines"
+DEFAULT_BOARD_WAIT_TIME = 0
+
+# Actions
+SERVICE_GET_DEPARTURES = "get_departures"
+SERVICE_GET_JOURNEYS = "get_journeys"
+
 __all__ = [name for name in globals() if name.isupper()]

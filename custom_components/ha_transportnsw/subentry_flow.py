@@ -22,6 +22,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import section
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.selector import (
+    SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
@@ -122,6 +123,7 @@ from .const import (
     TFNSW_STOPFINDER,
 )
 from .helpers import check_stops, get_device_trackers, set_optional_sensors
+from .network import load_network
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -309,6 +311,149 @@ class JourneySubEntryFlowHandler(ConfigSubentryFlow):
         except Exception as err:
             raise StopError("Unknown error checking stop IDs", "stoperror") from err
 
+    async def _stops_from_names(self, user_input: dict[str, Any]) -> None:
+        """Swap any stops chosen from the bundled list for their stop IDs.
+
+        If the whole journey is between stops on one network (two train
+        stations, two wharves...) the transport types default to that network.
+        """
+        network = await self.hass.async_add_executor_job(load_network)
+        self._transport_preset = None
+
+        origin = network.named(user_input[CONF_ORIGIN_ID])
+        if origin is not None:
+            user_input[CONF_ORIGIN_ID] = origin.id
+
+        destinations = [
+            network.named(
+                destination, network.destinations(origin) if origin else None
+            )
+            for destination in user_input[CONF_DESTINATION_ID]
+        ]
+        user_input[CONF_DESTINATION_ID] = [
+            station.id if station is not None else destination
+            for station, destination in zip(
+                destinations, user_input[CONF_DESTINATION_ID], strict=True
+            )
+        ]
+
+        if origin is not None and all(
+            station is not None and station.mode in origin.modes
+            for station in destinations
+        ):
+            self._transport_preset = [str(mode) for mode in sorted(origin.modes)]
+
+    async def _check_journey(self, user_input: dict[str, Any]) -> dict[str, str]:
+        """Validate the stops and remember the journey - returns any errors."""
+        errors: dict[str, str] = {}
+
+        if "device_tracker." in user_input[CONF_ORIGIN_ID]:
+            origin_type = "device_tracker"
+        else:
+            origin_type = "stop"
+
+        user_input.update({CONF_ORIGIN_TYPE: origin_type})
+
+        # The form has been filled in and submitted, so process the data provided.
+        try:
+            # Validate that the setup data is valid and if not handle errors.
+            info, errors = await self._validate_input(self.hass, user_input)
+
+        except InvalidAPIKey:
+            errors["base"] = "invalidapikey"
+
+        except APIRateLimitExceeded:
+            errors["base"] = "apiratelimitexceeded"
+
+        except StopError as err:
+            errors["base"] = err.stop_detail
+
+        except TripError:
+            errors["base"] = "triperror"
+
+        except Exception:
+            errors["base"] = "unknown"
+
+        # Check for errors
+        if "base" not in errors:
+            # Validation was successful, so create a unique id for this instance
+            # and create the config subentry.
+
+            # Check the unique ID against the existing subentries
+            # The actual unique ID will be set during subentry creation later
+
+            # It's possible that the stop validation function
+            # returned better stop IDs, so use them
+            unique_id_destination = "_".join(user_input[CONF_DESTINATION_ID])
+            unique_id = f"{user_input[CONF_ORIGIN_ID]}_{unique_id_destination}"
+
+            if self.source != SOURCE_RECONFIGURE:
+                for existing_subentry in self._get_entry().subentries.values():
+                    if existing_subentry.unique_id == unique_id:
+                        errors["base"] = "outbound_already_configured"
+
+                if user_input[CONF_CREATE_REVERSE_TRIP]:
+                    unique_id_destination = "_".join(
+                        user_input[CONF_DESTINATION_ID]
+                    )
+                    unique_id = (
+                        f"{unique_id_destination}_{user_input[CONF_ORIGIN_ID]}"
+                    )
+
+                    for existing_subentry in self._get_entry().subentries.values():
+                        if existing_subentry.unique_id == unique_id:
+                            errors["base"] = "return_already_configured"
+
+        # Check for errors again - duplicate journeys are an error that
+        #  might have just been discovered
+        if "base" not in errors:
+            # Validation was successful, create the config subentry/subentries
+
+            # Add an empty CONF_NAME field - it's only used for migrated journeys,
+            # journeys created via config flow way will use the new naming convention
+            user_input.update({CONF_NAME: ""})
+
+            self._input_data = user_input
+            placeholders = {"journey_name": info["title"]}
+            self.context["title_placeholders"] = placeholders
+
+        return errors
+
+    async def _check_origin(self, origin: str) -> tuple[str, dict[str, str]]:
+        """Check the origin and return the name to show for it, plus any errors."""
+        errors: dict[str, str] = {}
+
+        if "device_tracker." in origin:
+            entity_info = get_device_trackers(self.hass, origin)
+            return (entity_info[0]["label"] if entity_info else origin), errors
+
+        network = await self.hass.async_add_executor_job(load_network)
+        station = network.named(origin)
+        if station is not None:
+            return station.label, errors
+
+        # It's not in the bundled list, so let the API try and find it
+        try:
+            stop_data = await self.hass.async_add_executor_job(
+                check_stops, self._get_entry().data[CONF_API_KEY], [origin]
+            )
+            stop = stop_data["stop_list"][0]
+            if stop_data.get("all_stops_valid") and stop.get("valid"):
+                return stop["stop_detail"]["disassembledName"], errors
+
+            errors["base"] = "stoperror_origin"
+
+        except InvalidAPIKey:
+            errors["base"] = "invalidapikey"
+
+        except APIRateLimitExceeded:
+            errors["base"] = "apiratelimitexceeded"
+
+        except Exception:
+            errors["base"] = "stoperror_origin"
+
+        return origin, errors
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
@@ -318,78 +463,20 @@ class JourneySubEntryFlowHandler(ConfigSubentryFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            if "device_tracker." in user_input[CONF_ORIGIN_ID]:
-                origin_type = "device_tracker"
+            if self.source == SOURCE_RECONFIGURE:
+                errors = await self._check_journey(user_input)
+
+                if "base" not in errors:
+                    # Call the next step
+                    return await self.async_step_settings()
+
             else:
-                origin_type = "stop"
+                # A new journey - the destinations are chosen on the next page, as they depend on the origin
+                self._origin = user_input[CONF_ORIGIN_ID]
+                self._origin_label, errors = await self._check_origin(self._origin)
 
-            user_input.update({CONF_ORIGIN_TYPE: origin_type})
-
-            # The form has been filled in and submitted, so process the data provided.
-            try:
-                # Validate that the setup data is valid and if not handle errors.
-                info, errors = await self._validate_input(self.hass, user_input)
-
-            except InvalidAPIKey:
-                errors["base"] = "invalidapikey"
-
-            except APIRateLimitExceeded:
-                errors["base"] = "apiratelimitexceeded"
-
-            except StopError as err:
-                errors["base"] = err.stop_detail
-
-            except TripError:
-                errors["base"] = "triperror"
-
-            except Exception:
-                errors["base"] = "unknown"
-
-            # Check for errors
-            if "base" not in errors:
-                # Validation was successful, so create a unique id for this instance
-                # and create the config subentry.
-
-                # Check the unique ID against the existing subentries
-                # The actual unique ID will be set during subentry creation later
-
-                # It's possible that the stop validation function
-                # returned better stop IDs, so use them
-                unique_id_destination = "_".join(user_input[CONF_DESTINATION_ID])
-                unique_id = f"{user_input[CONF_ORIGIN_ID]}_{unique_id_destination}"
-
-                if self.source != SOURCE_RECONFIGURE:
-                    for existing_subentry in self._get_entry().subentries.values():
-                        if existing_subentry.unique_id == unique_id:
-                            errors["base"] = "outbound_already_configured"
-
-                    if user_input[CONF_CREATE_REVERSE_TRIP]:
-                        unique_id_destination = "_".join(
-                            user_input[CONF_DESTINATION_ID]
-                        )
-                        unique_id = (
-                            f"{unique_id_destination}_{user_input[CONF_ORIGIN_ID]}"
-                        )
-
-                        for existing_subentry in self._get_entry().subentries.values():
-                            if existing_subentry.unique_id == unique_id:
-                                errors["base"] = "return_already_configured"
-
-            # Check for errors again - duplicate journeys are an error that
-            #  might have just been discovered
-            if "base" not in errors:
-                # Validation was successful, create the config subentry/subentries
-
-                # Add an empty CONF_NAME field - it's only used for migrated journeys,
-                # journeys created via config flow way will use the new naming convention
-                user_input.update({CONF_NAME: ""})
-
-                self._input_data = user_input
-                placeholders = {"journey_name": info["title"]}
-                self.context["title_placeholders"] = placeholders
-
-                # Call the next step
-                return await self.async_step_settings()
+                if "base" not in errors:
+                    return await self.async_step_destination()
 
         # Are we reconfiguring or are we creating a new journey?
         if user_input is None:
@@ -456,6 +543,34 @@ class JourneySubEntryFlowHandler(ConfigSubentryFlow):
             }
         )
 
+        if self.source != SOURCE_RECONFIGURE:
+            # Offer the bundled stations, wharves and light rail stops - anything else can still be typed in
+            network = await self.hass.async_add_executor_job(load_network)
+            options = [
+                *options,
+                *(
+                    SelectOptionDict(value=station.label, label=station.label)
+                    for station in network.stations
+                ),
+            ]
+
+            JOURNEY_DATA_SCHEMA = vol.Schema(
+                {
+                    vol.Required(
+                        CONF_ORIGIN_ID,
+                        default=user_input.get(CONF_ORIGIN_ID, ""),
+                    ): selector(
+                        {
+                            "select": {
+                                "options": options,
+                                "mode": "dropdown",
+                                "custom_value": True,
+                            }
+                        }
+                    ),
+                }
+            )
+
         description_placeholders = {"tfnsw_stopfinder": TFNSW_STOPFINDER}
 
         # Show initial form.
@@ -463,6 +578,70 @@ class JourneySubEntryFlowHandler(ConfigSubentryFlow):
             step_id="user",
             data_schema=JOURNEY_DATA_SCHEMA,
             description_placeholders=description_placeholders,
+            errors=errors,
+            last_step=False,
+        )
+
+    async def async_step_destination(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Choose where to go - the choices depend on the origin."""
+        errors: dict[str, str] = {}
+        chosen = user_input or {}
+
+        if user_input is not None:
+            journey_input = {
+                CONF_ORIGIN_ID: self._origin,
+                CONF_DESTINATION_ID: list(user_input[CONF_DESTINATION_ID]),
+                CONF_CREATE_REVERSE_TRIP: user_input[CONF_CREATE_REVERSE_TRIP],
+            }
+            await self._stops_from_names(journey_input)
+            errors = await self._check_journey(journey_input)
+
+            if "base" not in errors:
+                # Call the next step
+                return await self.async_step_settings()
+
+        network = await self.hass.async_add_executor_job(load_network)
+        origin = network.named(self._origin)
+
+        if origin is not None:
+            # Only offer the stops on the same network, starting with those on the same line
+            options = [station.name for station in network.destinations(origin)]
+        else:
+            options = [station.label for station in network.stations]
+
+        DESTINATION_DATA_SCHEMA = vol.Schema(
+            {
+                vol.Required(
+                    CONF_DESTINATION_ID,
+                    default=chosen.get(CONF_DESTINATION_ID, []),
+                ): selector(
+                    {
+                        "select": {
+                            "options": options,
+                            "mode": "dropdown",
+                            "custom_value": True,
+                            "multiple": True,
+                        }
+                    }
+                ),
+                vol.Required(
+                    CONF_CREATE_REVERSE_TRIP,
+                    default=chosen.get(
+                        CONF_CREATE_REVERSE_TRIP, DEFAULT_CREATE_REVERSE_TRIP
+                    ),
+                ): bool,
+            }
+        )
+
+        return self.async_show_form(
+            step_id="destination",
+            data_schema=DESTINATION_DATA_SCHEMA,
+            description_placeholders={
+                "origin_name": self._origin_label,
+                "tfnsw_stopfinder": TFNSW_STOPFINDER,
+            },
             errors=errors,
             last_step=False,
         )
@@ -495,10 +674,14 @@ class JourneySubEntryFlowHandler(ConfigSubentryFlow):
                 self._input_data = user_input
 
             else:
-                # Create the initial defaults
+                # Create the initial defaults - a journey between two stops on the
+                # same network defaults to that network's transport types
+                transport_types = (
+                    getattr(self, "_transport_preset", None) or DEFAULT_TRANSPORT_TYPE
+                )
                 user_input = {
-                    CONF_ORIGIN_TRANSPORT_TYPE: DEFAULT_TRANSPORT_TYPE,
-                    CONF_DESTINATION_TRANSPORT_TYPE: DEFAULT_TRANSPORT_TYPE,
+                    CONF_ORIGIN_TRANSPORT_TYPE: transport_types,
+                    CONF_DESTINATION_TRANSPORT_TYPE: transport_types,
                     CONF_MAX_CHANGES: DEFAULT_MAX_CHANGES,
                     CONF_TRIP_WAIT_TIME: DEFAULT_TRIP_WAIT_TIME,
                 }

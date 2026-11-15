@@ -1,0 +1,15 @@
+get_departures:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: ha_transportnsw
+          domain: sensor
+get_journeys:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: ha_transportnsw

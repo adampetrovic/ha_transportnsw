@@ -31,6 +31,10 @@ Enter the API token and how often you want the sensors to update and you're done
 Each journey is a [subentry](https://developers.home-assistant.io/docs/config_entries_index#config-subentries) and has its own journey-specific set of options.  Journey-specific options can be chosen at the time of creation or at any time afterwards.  Each config flow page has a detailed explanation of the options it provides, including filtering based on your preferred transport types (train, bus, etc).
 
 ### Origin and destination
+The origin is chosen first, from a list of every station, wharf and light rail stop - start typing to narrow it down.  The destination list on the next page then depends on where you're starting: from a train station it holds the train and metro network, with the stations on your own line first, and likewise for ferries and light rail.  A journey between two stops on the same network defaults to that network's transport types, so 'Panania to Wynyard' is a train journey without having to say so.
+
+The list is bundled with the integration (`network.json`, generated from the TfNSW GTFS timetables) and doesn't include bus stops.  For anywhere that isn't listed, type a name or stop ID and choose 'Add custom item':
+
 You can specify the origin and destination(s) either by stop ID or the full name of the location.  If you enter the full (or partial) name, for example 'Central Station', the `stop_finder` API call will be called and whatever comes back as the 'best' (as determined by the API) will be used.  Using known stop IDs are obviously less likely to result in the integration choosing the wrong location, but in most cases you'll get what you want the first time.
 
 If you provide multiple destinations for a journey you will get the earliest journey that stops at _any_ of them.  You can also select a Device Tracker as the origin, which obviously means that the origin will change as you move around.
@@ -75,6 +79,23 @@ Some of the sensors have their own additional attributes:
 - Occupancy detail:  The state of this sensor is a glyph-based representation of the per-carriage occupancy, if available.  The ```occupancy detail``` attribute contains the same information as the Occupancy sensor's ```occupancy detail``` attribute.
 - Alerts: The state of this sensor is the highest alert returned by the API.  The attributes are the full JSON dump of the alert details, which can be processed by your automations or template sensors as required.
 - Device tracker: The stop name and ID are included.
+
+## Departure boards
+A departure board is everything leaving one stop, in every direction - use 'Add departure board' on the integration page.  Choose the stop the same way as a journey's origin, then optionally limit the board to certain lines (the list shows what's running from the stop right now) and set a minimum time until departure.
+
+Each board creates sensors for the next departure - due, departure time, line, destination, platform, delay and occupancy - plus an alerts sensor.  Sensors for the following two departure times are created but disabled by default.  The API returns at most 40 services per stop.
+
+Each board poll is one API call, and is included in the API call counter and the automatic update interval.
+
+## Actions
+`ha_transportnsw.get_departures` returns every upcoming departure on a departure board, and `ha_transportnsw.get_journeys` returns the tracked trips for a journey with all of their detail.  Both take any entity that belongs to the board or journey:
+
+```yaml
+action: ha_transportnsw.get_departures
+data:
+  entity_id: sensor.panania_due
+response_variable: board
+```
 
 ## Automatic update interval
 At the config entry level you can set the update interval in the traditional fashion, or set it to `automatic`.  The integration maintains a rolling average of how many API calls are used at each poll - when on automatic that information, along with how many API calls are left from the daily allocation and how far through the day it is, to determine an appropriate update interval.  If new journeys are created or removed they will be catered for automatically.

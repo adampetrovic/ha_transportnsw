@@ -56,6 +56,7 @@ from .const import (
     DOMAIN,
     INTEGRATION_VERSION,
     STORAGE_VERSION,
+    SUBENTRY_TYPE_BOARD,
     SUBENTRY_TYPE_JOURNEY,
 )
 from .coordinator import (
@@ -63,12 +64,14 @@ from .coordinator import (
     TransportNSWCoordinator,
     TransportNSWRuntimeData,
 )
+from .departure_board import TransportNSWBoardCoordinator
 from .helpers import (
     check_stops,
     delete_legacy_storage,
     get_optional_sensors,
     set_optional_sensors,
 )
+from .services import async_setup_services
 from .www import JSModuleRegistration
 
 _LOGGER = logging.getLogger(__name__)
@@ -371,6 +374,9 @@ async def async_setup(hass: HomeAssistant, config_entry: TransportNSWConfigEntry
     # Register websocket command for version checking of the Lovelace card
     websocket_api.async_register_command(hass, websocket_get_version)
 
+    # Register the get_departures and get_journeys actions
+    async_setup_services(hass)
+
     return True
 
 
@@ -462,6 +468,18 @@ async def async_setup_entry(
         # Initiate the coordinator
         await coordinator.async_config_entry_first_refresh()
         _LOGGER.debug(f"Initialised coordinator for {config_entry.title}")
+
+        # Each departure board has its own coordinator - a board that can't be
+        # retrieved just makes its own sensors unavailable
+        for subentry in config_entry.subentries.values():
+            if subentry.subentry_type == SUBENTRY_TYPE_BOARD:
+                board_coordinator = TransportNSWBoardCoordinator(
+                    hass, config_entry, subentry
+                )
+                await board_coordinator.async_refresh()
+                config_entry.runtime_data.board_coordinators[
+                    subentry.subentry_id
+                ] = board_coordinator
 
     except Exception as ex:
         # This is a fatal error

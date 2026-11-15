@@ -56,7 +56,7 @@
                 "reconfigure": "Change journey options"
             },
             "step": {
-                "user" : {
+                "user": {
                     "data": {
                         "hassfest_placeholder": "hassfest_placeholder"
                     }
@@ -101,11 +101,18 @@
             "step": {
                 "user": {
                     "data": {
-                        "origin_id": "The stop ID/name of your start point, or a Mobile App device tracker",
+                        "origin_id": "Start point (a stop, or a Mobile App device tracker)",
                         "destination_id": "The stop ID/name of your destination",
                         "create_reverse_trip": "Also create the return journey"
                     },
-                    "description": "Provide the details of the journey you want to monitor - specific Stop IDs or general stop names can be used.  If entering a stop name, such as 'Central station' the more specific you are the more likely that the API will find the right stop.\n\nFor the origin you can also choose a Mobile App-sourced Device Tracker so your current location becomes the origin.\n\nIf you enter multiple destinations the journey with the earliest arrival time across ALL destinations will be shown.\n\nStop IDs can be looked up [here]({tfnsw_stopfinder})."
+                    "description": "Where does the journey start?  Pick a station, wharf or light rail stop from the list. For anywhere that isn't listed (a bus stop, for example) type a stop name or stop ID and choose 'Add custom item' - the more specific the name, the more likely that the API will find the right stop.\n\nYou can also choose a Mobile App-sourced Device Tracker so your current location becomes the origin.\n\nStop IDs can be looked up [here]({tfnsw_stopfinder})."
+                },
+                "destination": {
+                    "data": {
+                        "destination_id": "Your destination",
+                        "create_reverse_trip": "Also create the return journey"
+                    },
+                    "description": "Where are you going from {origin_name}?\n\nIf you started from a listed stop, the list shows the stops on the same network with those on the same line first. For anywhere else type a stop name or stop ID and choose 'Add custom item'.\n\nIf you enter multiple destinations the journey with the earliest arrival time across ALL destinations will be shown.\n\nStop IDs can be looked up [here]({tfnsw_stopfinder})."
                 },
                 "settings": {
                     "data": {
@@ -210,7 +217,42 @@
                     "description": "Select the optional journey-specific sensors you want.",
                     "title": "{journey_name}"
                 }
-            }          
+            }
+        },
+        "subentry_departure_board": {
+            "entry_type": "Departure board",
+            "flow_title": "Transport NSW Mk II",
+            "initiate_flow": {
+                "user": "Add departure board",
+                "reconfigure": "Change departure board options"
+            },
+            "abort": {
+                "board_created": "Departure board for {stop_name} registered successfully.",
+                "reconfigure_successful": "Departure board reconfiguration successful."
+            },
+            "error": {
+                "apiratelimitexceeded": "API rate limit exceeded - wait a moment and try again.",
+                "invalidapikey": "Invalid API key, please check and retry.",
+                "unknown": "Unexpected error.",
+                "stoperror": "That stop couldn't be found, please check and retry.",
+                "already_configured": "You have already added a departure board for that stop."
+            },
+            "step": {
+                "user": {
+                    "data": {
+                        "stop": "The stop to show departures from"
+                    },
+                    "description": "A departure board shows everything leaving one stop, in every direction.  To follow one direction only, add a journey instead.\n\nPick a station, wharf or light rail stop from the list. For anywhere that isn't listed (a bus stop, for example) type a stop name or stop ID and choose 'Add custom item'."
+                },
+                "filter": {
+                    "title": "{stop_name}",
+                    "data": {
+                        "lines": "Lines to show",
+                        "trip_wait_time": "Minimum time until departure (minutes)"
+                    },
+                    "description": "Choose the lines to show, or leave it empty to show everything.  The list holds the lines running from the stop right now - type a line (eg T8 or 370) to add one that isn't listed.\n\nDepartures sooner than the minimum time are skipped, which is useful if it takes you a while to get to the stop."
+                }
+            }
         }
     },
     "selector": {
@@ -265,6 +307,28 @@
                 "changes_and_times": "Trip changes and arrival/departure times",
                 "verbose": "All available sensors and device trackers",
                 "custom": "Custom"
+            }
+        }
+    },
+    "services": {
+        "get_departures": {
+            "name": "Get departures",
+            "description": "Returns every upcoming departure on a departure board.",
+            "fields": {
+                "entity_id": {
+                    "name": "Entity",
+                    "description": "Any sensor that belongs to the departure board."
+                }
+            }
+        },
+        "get_journeys": {
+            "name": "Get journeys",
+            "description": "Returns the tracked trips for a journey, with all of their detail.",
+            "fields": {
+                "entity_id": {
+                    "name": "Entity",
+                    "description": "Any entity that belongs to the journey."
+                }
             }
         }
     }

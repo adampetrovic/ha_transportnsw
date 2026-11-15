@@ -99,6 +99,7 @@ from .const import (
     TFNSW_ATTRIBUTION,
 )
 from .coordinator import TransportNSWCoordinator
+from .board_sensor import setup_board_sensors
 from .helpers import (
     extract_from_hierarchy,
     get_journey_data,
@@ -577,6 +578,9 @@ async def async_setup_entry(
     ]
 
     async_add_entities(configentry_sensors, update_before_add=True)
+
+    # Create the departure board sensors
+    setup_board_sensors(config_entry, async_add_entities)
 
 
 class TransportNSWSensor(CoordinatorEntity, SensorEntity):
